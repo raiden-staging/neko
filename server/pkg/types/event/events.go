@@ -12,6 +12,7 @@ const (
 
 const (
 	CLIENT_HEARTBEAT = "client/heartbeat"
+	CLIENT_PING = "client/ping"
 )
 
 const (

@@ -37,7 +37,7 @@ func (h *MessageHandlerCtx) Message(session types.Session, data types.WebSocketM
 	var err error
 	switch data.Event {
 	// Client Events
-	case event.CLIENT_HEARTBEAT:
+	case event.CLIENT_PING:
 		err = h.systemPong(session)
 
 	// System Events
@@ -193,6 +193,7 @@ func (h *MessageHandlerCtx) Message(session types.Session, data types.WebSocketM
 			return h.sendBroadcast(session, payload)
 		})
 	default:
+		err = h.systemPong(session)
 		return false
 	}
 
