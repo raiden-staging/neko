@@ -6,7 +6,7 @@ const (
 	SYSTEM_SETTINGS   = "system/settings"
 	SYSTEM_LOGS       = "system/logs"
 	SYSTEM_DISCONNECT = "system/disconnect"
-	SYSTEM_HEARTBEAT  = "system/heartbeat"
+	SYSTEM_PONG       = "system/pong"
 )
 
 const (
