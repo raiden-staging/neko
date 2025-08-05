@@ -220,6 +220,7 @@ RUN apt-get update; \
 # copy runtime configs
 COPY --chown=neko:neko .Xresources /home/$USERNAME/.Xresources
 COPY default.pa /etc/pulse/default.pa
+COPY default.pa /etc/pulse/system.pa
 COPY supervisord.conf /etc/neko/supervisord.conf
 COPY xorg.conf /etc/neko/xorg.conf
 COPY nvidia/entrypoint.sh /bin/entrypoint.sh

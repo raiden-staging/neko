@@ -34,12 +34,16 @@ RUN set -eux; \
     apt-get install --no-install-recommends ./libxcvt0_0.1.2-1_${ARCH}.deb; \
     rm ./libxcvt0_0.1.2-1_${ARCH}.deb; \
     #
+    # configure pulseaudio for system-wide mode
+    groupadd --system pulse-access || true; \
+    adduser root pulse-access; \
     # create a non-root user
     groupadd --gid $USER_GID $USERNAME; \
     useradd --uid $USER_UID --gid $USERNAME --shell /bin/bash --create-home $USERNAME; \
     adduser $USERNAME audio; \
     adduser $USERNAME video; \
     adduser $USERNAME pulse; \
+    adduser $USERNAME pulse-access; \
     #
     # workaround for an X11 problem: http://blog.tigerteufel.de/?p=476
     mkdir /tmp/.X11-unix; \
@@ -80,6 +84,7 @@ RUN set -eux; \
 COPY --chown=neko:neko .Xresources /home/$USERNAME/.Xresources
 COPY dbus /usr/bin/dbus
 COPY default.pa /etc/pulse/default.pa
+COPY default.pa /etc/pulse/system.pa
 COPY supervisord.conf /etc/neko/supervisord.conf
 COPY supervisord.dbus.conf /etc/neko/supervisord.dbus.conf
 COPY xorg.conf /etc/neko/xorg.conf

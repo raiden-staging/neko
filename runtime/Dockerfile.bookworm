@@ -28,12 +28,16 @@ RUN set -eux; \
         gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
         gstreamer1.0-pulseaudio; \
     #
+    # configure pulseaudio for system-wide mode
+    groupadd --system pulse-access || true; \
+    adduser root pulse-access; \
     # create a non-root user
     groupadd --gid $USER_GID $USERNAME; \
     useradd --uid $USER_UID --gid $USERNAME --shell /bin/bash --create-home $USERNAME; \
     adduser $USERNAME audio; \
     adduser $USERNAME video; \
     adduser $USERNAME pulse; \
+    adduser $USERNAME pulse-access; \
     #
     # workaround for an X11 problem: http://blog.tigerteufel.de/?p=476
     mkdir /tmp/.X11-unix; \
@@ -73,6 +77,7 @@ RUN set -eux; \
 # copy runtime configs
 COPY --chown=neko:neko .Xresources /home/$USERNAME/.Xresources
 COPY default.pa /etc/pulse/default.pa
+COPY default.pa /etc/pulse/system.pa
 COPY supervisord.conf /etc/neko/supervisord.conf
 COPY xorg.conf /etc/neko/xorg.conf
 
