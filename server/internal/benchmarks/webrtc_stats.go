@@ -79,6 +79,11 @@ type connectionStats struct {
 	// Per-connection metrics
 	frameRate     float64
 	bitrate       float64
+
+	// Track frame counts for rate calculation
+	lastFramesSent uint32
+	lastBytesSent  uint64
+	lastStatsTime  time.Time
 }
 
 // NewWebRTCStatsCollector creates a new WebRTC stats collector
@@ -135,19 +140,73 @@ func (c *WebRTCStatsCollector) UpdateConnectionStats(pc *webrtc.PeerConnection, 
 	}
 }
 
+// updateAllConnectionStats polls WebRTC stats for all connections and updates metrics
+func (c *WebRTCStatsCollector) updateAllConnectionStats(ctx context.Context) {
+	c.connectionsMu.Lock()
+	defer c.connectionsMu.Unlock()
+
+	now := time.Now()
+
+	for pc, stats := range c.connections {
+		// Get WebRTC stats for this peer connection
+		rtcStats := pc.GetStats()
+
+		// Extract outbound RTP video stats
+		for _, stat := range rtcStats {
+			switch s := stat.(type) {
+			case webrtc.OutboundRTPStreamStats:
+				if s.Kind == "video" {
+					// Calculate frame rate from FramesEncoded
+					if stats.lastFramesSent > 0 && !stats.lastStatsTime.IsZero() {
+						deltaFrames := s.FramesEncoded - stats.lastFramesSent
+						deltaTime := now.Sub(stats.lastStatsTime).Seconds()
+						if deltaTime > 0 {
+							stats.frameRate = float64(deltaFrames) / deltaTime
+						}
+					}
+
+					// Calculate bitrate (bytes to kbps)
+					if stats.lastBytesSent > 0 && !stats.lastStatsTime.IsZero() {
+						deltaBytes := s.BytesSent - stats.lastBytesSent
+						deltaTime := now.Sub(stats.lastStatsTime).Seconds()
+						if deltaTime > 0 {
+							stats.bitrate = (float64(deltaBytes) * 8) / (deltaTime * 1000) // kbps
+						}
+					}
+
+					// Store current values for next calculation
+					stats.lastFramesSent = s.FramesEncoded
+					stats.lastBytesSent = s.BytesSent
+					stats.lastStatsTime = now
+					stats.lastUpdate = now
+				}
+			}
+		}
+	}
+}
+
 // CollectStats collects current WebRTC statistics
 func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.Duration) (*WebRTCBenchmarkStats, error) {
 	c.logger.Info().Dur("duration", duration).Msg("collecting WebRTC stats")
 
-	// Wait for the collection duration
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
+	// Poll stats every second during the collection period
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	endTime := time.Now().Add(duration)
+
+	for time.Now().Before(endTime) {
+		select {
+		case <-ticker.C:
+			// Update stats for all connections
+			c.updateAllConnectionStats(ctx)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+
+	// Final stats update
+	c.updateAllConnectionStats(ctx)
 
 	// Aggregate stats from all connections
 	c.connectionsMu.RLock()
@@ -164,7 +223,7 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 		totalFrameRate += stats.frameRate
 		totalBitrate += stats.bitrate
 
-		if stats.frameRate < minFrameRate {
+		if stats.frameRate < minFrameRate && stats.frameRate > 0 {
 			minFrameRate = stats.frameRate
 		}
 		if stats.frameRate > maxFrameRate {
@@ -173,7 +232,7 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 	}
 	c.connectionsMu.RUnlock()
 
-	if numConnections == 0 {
+	if numConnections == 0 || minFrameRate == 999999 {
 		minFrameRate = 0
 	}
 
@@ -190,9 +249,9 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 		avgConnectionSetup = total / float64(len(c.connectionTimes))
 	}
 
-	// Approximate CPU and memory (would need actual measurement)
-	cpuUsage := estimateCPUUsage(numConnections)
-	memoryUsage := estimateMemoryUsage(numConnections)
+	// Get real CPU and memory usage
+	cpuUsage := measureCPUUsage()
+	memoryUsage := measureMemoryUsage(numConnections)
 
 	stats := &WebRTCBenchmarkStats{
 		Timestamp: time.Now(),
@@ -245,19 +304,43 @@ func max(a, b int) int {
 	return b
 }
 
-// estimateCPUUsage estimates CPU usage based on number of connections
-// This is a placeholder - real implementation would use actual CPU metrics
-func estimateCPUUsage(numConnections int) float64 {
-	// Baseline ~5%, ~7% per connection
-	return 5.0 + float64(numConnections)*7.0
+// measureCPUUsage measures actual CPU usage
+func measureCPUUsage() float64 {
+	// Take two snapshots 100ms apart
+	before, err := GetProcessCPUStats()
+	if err != nil {
+		// Fallback to estimate
+		return 0.0
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	after, err := GetProcessCPUStats()
+	if err != nil {
+		return 0.0
+	}
+
+	return CalculateCPUPercent(before, after)
 }
 
-// estimateMemoryUsage estimates memory usage based on number of connections
-// This is a placeholder - real implementation would use actual memory metrics
-func estimateMemoryUsage(numConnections int) MemoryMetrics {
-	// Baseline ~100MB, ~15MB per connection
+// measureMemoryUsage measures actual memory usage
+func measureMemoryUsage(numConnections int) MemoryMetrics {
+	// Try to get RSS memory first
+	rss, err := GetProcessRSSMemoryMB()
+	if err != nil {
+		// Fallback to heap memory
+		rss = GetProcessMemoryMB()
+	}
+
+	perViewer := 0.0
+	if numConnections > 0 {
+		// Rough estimate of per-viewer overhead
+		// Would need baseline measurement to be more accurate
+		perViewer = rss / float64(numConnections)
+	}
+
 	return MemoryMetrics{
-		Baseline:  100.0,
-		PerViewer: float64(numConnections) * 15.0,
+		Baseline:  rss,
+		PerViewer: perViewer,
 	}
 }

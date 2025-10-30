@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 
+	"github.com/m1k1o/neko/server/internal/benchmarks"
 	"github.com/m1k1o/neko/server/internal/config"
 	"github.com/m1k1o/neko/server/internal/webrtc/cursor"
 	"github.com/m1k1o/neko/server/internal/webrtc/pionlog"
@@ -106,6 +107,10 @@ type WebRTCManagerCtx struct {
 	udpMux ice.UDPMux
 
 	camStop, micStop *func()
+
+	// Benchmark collector for performance metrics
+	benchmarkCollector *benchmarks.WebRTCStatsCollector
+	benchmarkMu        sync.RWMutex
 }
 
 func (manager *WebRTCManagerCtx) Start() {
@@ -167,6 +172,33 @@ func (manager *WebRTCManagerCtx) Shutdown() error {
 
 func (manager *WebRTCManagerCtx) ICEServers() []types.ICEServer {
 	return manager.config.ICEServersFrontend
+}
+
+// SetBenchmarkCollector sets the benchmark collector for WebRTC stats
+func (manager *WebRTCManagerCtx) SetBenchmarkCollector(collector *benchmarks.WebRTCStatsCollector) {
+	manager.benchmarkMu.Lock()
+	defer manager.benchmarkMu.Unlock()
+	manager.benchmarkCollector = collector
+}
+
+// registerPeerConnection registers a peer connection with the benchmark collector
+func (manager *WebRTCManagerCtx) registerPeerConnection(pc *webrtc.PeerConnection) {
+	manager.benchmarkMu.RLock()
+	defer manager.benchmarkMu.RUnlock()
+
+	if manager.benchmarkCollector != nil {
+		manager.benchmarkCollector.RegisterConnection(pc)
+	}
+}
+
+// unregisterPeerConnection unregisters a peer connection from the benchmark collector
+func (manager *WebRTCManagerCtx) unregisterPeerConnection(pc *webrtc.PeerConnection) {
+	manager.benchmarkMu.RLock()
+	defer manager.benchmarkMu.RUnlock()
+
+	if manager.benchmarkCollector != nil {
+		manager.benchmarkCollector.UnregisterConnection(pc)
+	}
 }
 
 func (manager *WebRTCManagerCtx) newPeerConnection(logger zerolog.Logger, codecs []codec.RTPCodec) (*webrtc.PeerConnection, cc.BandwidthEstimator, error) {
@@ -291,6 +323,9 @@ func (manager *WebRTCManagerCtx) CreatePeer(session types.Session) (*webrtc.Sess
 		return nil, nil, err
 	}
 
+	// Register connection with benchmark collector
+	manager.registerPeerConnection(connection)
+
 	// asynchronously send local ICE Candidates
 	if manager.config.ICETrickle {
 		connection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -344,6 +379,7 @@ func (manager *WebRTCManagerCtx) CreatePeer(session types.Session) (*webrtc.Sess
 		logger:     logger,
 		session:    session,
 		metrics:    metrics,
+		manager:    manager,
 		connection: connection,
 		// bandwidth estimator
 		estimator: estimator,
