@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -179,6 +180,31 @@ func (manager *WebRTCManagerCtx) SetBenchmarkCollector(collector *benchmarks.Web
 	manager.benchmarkMu.Lock()
 	defer manager.benchmarkMu.Unlock()
 	manager.benchmarkCollector = collector
+
+	// Start periodic stats export in background
+	if collector != nil {
+		go manager.periodicStatsExport(collector)
+	}
+}
+
+// periodicStatsExport periodically collects and exports WebRTC benchmark stats
+func (manager *WebRTCManagerCtx) periodicStatsExport(collector *benchmarks.WebRTCStatsCollector) {
+	ticker := time.NewTicker(5 * time.Second) // Export stats every 5 seconds
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Collect current stats (10-second window)
+		stats, err := collector.CollectStats(context.Background(), 10*time.Second)
+		if err != nil {
+			manager.logger.Warn().Err(err).Msg("failed to collect benchmark stats")
+			continue
+		}
+
+		// Export to file for kernel-images to read
+		if err := collector.ExportStats(stats); err != nil {
+			manager.logger.Warn().Err(err).Msg("failed to export benchmark stats")
+		}
+	}
 }
 
 // registerPeerConnection registers a peer connection with the benchmark collector
