@@ -52,6 +52,11 @@ type SystemPong struct {
 	Timestamp int64 `json:"timestamp"` // Unix ms
 }
 
+// SystemBenchmarkReady is sent when benchmark collection is complete
+type SystemBenchmarkReady struct {
+	Timestamp int64 `json:"timestamp"` // Unix ms
+}
+
 /////////////////////////////
 // Signal
 /////////////////////////////

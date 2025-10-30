@@ -181,30 +181,69 @@ func (manager *WebRTCManagerCtx) SetBenchmarkCollector(collector *benchmarks.Web
 	defer manager.benchmarkMu.Unlock()
 	manager.benchmarkCollector = collector
 
-	// Start periodic stats export in background
+	// Perform initial stats collection on startup
 	if collector != nil {
-		go manager.periodicStatsExport(collector)
+		go manager.initialStatsCollection(collector)
 	}
 }
 
-// periodicStatsExport periodically collects and exports WebRTC benchmark stats
-func (manager *WebRTCManagerCtx) periodicStatsExport(collector *benchmarks.WebRTCStatsCollector) {
-	ticker := time.NewTicker(5 * time.Second) // Export stats every 5 seconds
-	defer ticker.Stop()
+// initialStatsCollection performs an initial benchmark collection on startup
+// then stops (on-demand collection via websocket messages will trigger new collections)
+func (manager *WebRTCManagerCtx) initialStatsCollection(collector *benchmarks.WebRTCStatsCollector) {
+	// Wait a bit for WebRTC connections to potentially be established
+	time.Sleep(2 * time.Second)
 
-	for range ticker.C {
-		// Collect current stats (10-second window)
-		stats, err := collector.CollectStats(context.Background(), 10*time.Second)
-		if err != nil {
-			manager.logger.Warn().Err(err).Msg("failed to collect benchmark stats")
-			continue
-		}
+	manager.logger.Info().Msg("performing initial WebRTC benchmark collection")
 
-		// Export to file for kernel-images to read
-		if err := collector.ExportStats(stats); err != nil {
-			manager.logger.Warn().Err(err).Msg("failed to export benchmark stats")
-		}
+	// Collect stats over 15-second window
+	stats, err := collector.CollectStats(context.Background(), 15*time.Second)
+	if err != nil {
+		manager.logger.Warn().Err(err).Msg("failed to collect initial benchmark stats")
+		return
 	}
+
+	// Export to file for kernel-images to read
+	if err := collector.ExportStats(stats); err != nil {
+		manager.logger.Warn().Err(err).Msg("failed to export initial benchmark stats")
+		return
+	}
+
+	manager.logger.Info().
+		Float64("fps", stats.FrameRateFPS.Achieved).
+		Int("viewers", stats.ConcurrentViewers).
+		Msg("initial WebRTC benchmark collection completed")
+}
+
+// TriggerBenchmarkCollection triggers an on-demand benchmark collection
+// This is called when kernel-images sends a websocket message requesting fresh stats
+func (manager *WebRTCManagerCtx) TriggerBenchmarkCollection(ctx context.Context) error {
+	manager.benchmarkMu.RLock()
+	collector := manager.benchmarkCollector
+	manager.benchmarkMu.RUnlock()
+
+	if collector == nil {
+		return fmt.Errorf("benchmark collector not initialized")
+	}
+
+	manager.logger.Info().Msg("triggered WebRTC benchmark collection")
+
+	// Collect stats over 15-second window
+	stats, err := collector.CollectStats(ctx, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to collect benchmark stats: %w", err)
+	}
+
+	// Export to file for kernel-images to read
+	if err := collector.ExportStats(stats); err != nil {
+		return fmt.Errorf("failed to export benchmark stats: %w", err)
+	}
+
+	manager.logger.Info().
+		Float64("fps", stats.FrameRateFPS.Achieved).
+		Int("viewers", stats.ConcurrentViewers).
+		Msg("on-demand WebRTC benchmark collection completed")
+
+	return nil
 }
 
 // registerPeerConnection registers a peer connection with the benchmark collector

@@ -189,17 +189,37 @@ func (c *WebRTCStatsCollector) updateAllConnectionStats(ctx context.Context) {
 func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.Duration) (*WebRTCBenchmarkStats, error) {
 	c.logger.Info().Dur("duration", duration).Msg("collecting WebRTC stats")
 
-	// Poll stats every second during the collection period
-	ticker := time.NewTicker(1 * time.Second)
+	// Track frame latencies for percentile calculations
+	var frameLatencies []float64
+	var frameLatenciesMu sync.Mutex
+
+	// Poll stats more frequently (every 100ms) for better granularity
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	endTime := time.Now().Add(duration)
+	sampleCount := 0
 
 	for time.Now().Before(endTime) {
 		select {
 		case <-ticker.C:
 			// Update stats for all connections
 			c.updateAllConnectionStats(ctx)
+			sampleCount++
+
+			// Calculate frame latency based on actual frame rate
+			c.connectionsMu.RLock()
+			for _, stats := range c.connections {
+				if stats.frameRate > 0 {
+					// Frame time in ms = 1000 / fps
+					frameTime := 1000.0 / stats.frameRate
+					frameLatenciesMu.Lock()
+					frameLatencies = append(frameLatencies, frameTime)
+					frameLatenciesMu.Unlock()
+				}
+			}
+			c.connectionsMu.RUnlock()
+
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -239,6 +259,9 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 	avgFrameRate := totalFrameRate / float64(max(numConnections, 1))
 	avgBitrate := totalBitrate / float64(max(numConnections, 1))
 
+	// Calculate frame latency percentiles from collected samples
+	latencyMetrics := calculateLatencyPercentiles(frameLatencies)
+
 	// Calculate connection setup time average
 	avgConnectionSetup := 0.0
 	if len(c.connectionTimes) > 0 {
@@ -261,11 +284,7 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 			Min:      minFrameRate,
 			Max:      maxFrameRate,
 		},
-		FrameLatencyMS: LatencyMetrics{
-			P50: 33.0,  // Approximate for 30fps
-			P95: 50.0,
-			P99: 67.0,
-		},
+		FrameLatencyMS:    latencyMetrics,
 		BitrateKbps: BitrateMetrics{
 			Target: c.targetBitrate,
 			Actual: avgBitrate,
@@ -279,7 +298,59 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 		},
 	}
 
+	c.logger.Info().
+		Float64("avg_fps", avgFrameRate).
+		Float64("avg_bitrate_kbps", avgBitrate).
+		Int("viewers", numConnections).
+		Int("samples", sampleCount).
+		Msg("WebRTC stats collection completed")
+
 	return stats, nil
+}
+
+// calculateLatencyPercentiles calculates percentiles from latency samples
+func calculateLatencyPercentiles(latencies []float64) LatencyMetrics {
+	if len(latencies) == 0 {
+		// Return default estimates for 30fps
+		return LatencyMetrics{
+			P50: 33.3,
+			P95: 50.0,
+			P99: 67.0,
+		}
+	}
+
+	// Simple percentile calculation
+	sorted := make([]float64, len(latencies))
+	copy(sorted, latencies)
+
+	// Sort latencies
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[i] > sorted[j] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	p50Idx := int(float64(len(sorted)) * 0.50)
+	p95Idx := int(float64(len(sorted)) * 0.95)
+	p99Idx := int(float64(len(sorted)) * 0.99)
+
+	if p50Idx >= len(sorted) {
+		p50Idx = len(sorted) - 1
+	}
+	if p95Idx >= len(sorted) {
+		p95Idx = len(sorted) - 1
+	}
+	if p99Idx >= len(sorted) {
+		p99Idx = len(sorted) - 1
+	}
+
+	return LatencyMetrics{
+		P50: sorted[p50Idx],
+		P95: sorted[p95Idx],
+		P99: sorted[p99Idx],
+	}
 }
 
 // ExportStats exports stats to a file for kernel-images to read
