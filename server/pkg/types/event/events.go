@@ -13,6 +13,10 @@ const (
 )
 
 const (
+	BENCHMARK_WEBRTC_STATS = "benchmark/webrtc_stats"
+)
+
+const (
 	CLIENT_HEARTBEAT = "client/heartbeat"
 )
 
