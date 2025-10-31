@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -105,32 +104,5 @@ func (h *MessageHandlerCtx) systemPong(session types.Session) error {
 			Timestamp: time.Now().UnixMilli(),
 		},
 	)
-	return nil
-}
-
-func (h *MessageHandlerCtx) systemBenchmarkCollect(session types.Session) error {
-	h.logger.Info().Msg("received benchmark collection trigger via websocket")
-
-	// Trigger benchmark collection asynchronously
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := h.webrtc.TriggerBenchmarkCollection(ctx); err != nil {
-			h.logger.Error().Err(err).Msg("benchmark collection failed")
-			return
-		}
-
-		// Send response back to the requester
-		session.Send(
-			event.SYSTEM_BENCHMARK_READY,
-			message.SystemBenchmarkReady{
-				Timestamp: time.Now().UnixMilli(),
-			},
-		)
-
-		h.logger.Info().Msg("benchmark collection completed and stats exported")
-	}()
-
 	return nil
 }

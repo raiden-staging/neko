@@ -46,8 +46,6 @@ func (h *MessageHandlerCtx) Message(session types.Session, data types.WebSocketM
 		err = utils.Unmarshal(payload, data.Payload, func() error {
 			return h.systemLogs(session, payload)
 		})
-	case event.SYSTEM_BENCHMARK_COLLECT:
-		err = h.systemBenchmarkCollect(session)
 
 	// Signal Events
 	case event.SIGNAL_REQUEST:
