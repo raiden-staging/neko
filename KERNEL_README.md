@@ -58,4 +58,3 @@ Tags are structured as `v$UPSTREAM-v$INTERNAL` (e.g. `v3.0.6-v1.0.1`)
 git tag $TAG
 git push origin $TAG
 ```
-
