@@ -107,6 +107,10 @@ func (c *WebRTCStatsCollector) RegisterConnection(pc *webrtc.PeerConnection) {
 		lastUpdate: time.Now(),
 	}
 
+	c.logger.Info().
+		Int("total_connections", len(c.connections)).
+		Msg("registered new WebRTC connection for benchmarking")
+
 	// Monitor connection state changes to track setup time
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		if state == webrtc.PeerConnectionStateConnected {
@@ -114,6 +118,9 @@ func (c *WebRTCStatsCollector) RegisterConnection(pc *webrtc.PeerConnection) {
 			if stats, ok := c.connections[pc]; ok {
 				stats.setupDuration = time.Since(stats.createdAt)
 				c.connectionTimes = append(c.connectionTimes, float64(stats.setupDuration.Milliseconds()))
+				c.logger.Info().
+					Dur("setup_duration", stats.setupDuration).
+					Msg("WebRTC connection established")
 			}
 			c.connectionsMu.Unlock()
 		}
@@ -126,6 +133,9 @@ func (c *WebRTCStatsCollector) UnregisterConnection(pc *webrtc.PeerConnection) {
 	defer c.connectionsMu.Unlock()
 
 	delete(c.connections, pc)
+	c.logger.Info().
+		Int("remaining_connections", len(c.connections)).
+		Msg("unregistered WebRTC connection from benchmarking")
 }
 
 // UpdateConnectionStats updates statistics for a specific connection
@@ -146,22 +156,43 @@ func (c *WebRTCStatsCollector) updateAllConnectionStats(ctx context.Context) {
 	defer c.connectionsMu.Unlock()
 
 	now := time.Now()
+	statsProcessed := 0
+	videoStatsFound := 0
 
 	for pc, stats := range c.connections {
 		// Get WebRTC stats for this peer connection
 		rtcStats := pc.GetStats()
 
+		if len(rtcStats) == 0 {
+			c.logger.Debug().Msg("no stats returned from peer connection")
+			continue
+		}
+
 		// Extract outbound RTP video stats
 		for _, stat := range rtcStats {
+			statsProcessed++
 			switch s := stat.(type) {
 			case webrtc.OutboundRTPStreamStats:
+				c.logger.Debug().
+					Str("kind", s.Kind).
+					Uint32("frames", s.FramesEncoded).
+					Uint64("bytes", s.BytesSent).
+					Msg("found outbound RTP stream stats")
+
 				if s.Kind == "video" {
+					videoStatsFound++
+
 					// Calculate frame rate from FramesEncoded
 					if stats.lastFramesSent > 0 && !stats.lastStatsTime.IsZero() {
 						deltaFrames := s.FramesEncoded - stats.lastFramesSent
 						deltaTime := now.Sub(stats.lastStatsTime).Seconds()
 						if deltaTime > 0 {
 							stats.frameRate = float64(deltaFrames) / deltaTime
+							c.logger.Debug().
+								Float64("fps", stats.frameRate).
+								Uint32("delta_frames", deltaFrames).
+								Float64("delta_time", deltaTime).
+								Msg("calculated frame rate")
 						}
 					}
 
@@ -171,6 +202,10 @@ func (c *WebRTCStatsCollector) updateAllConnectionStats(ctx context.Context) {
 						deltaTime := now.Sub(stats.lastStatsTime).Seconds()
 						if deltaTime > 0 {
 							stats.bitrate = (float64(deltaBytes) * 8) / (deltaTime * 1000) // kbps
+							c.logger.Debug().
+								Float64("bitrate_kbps", stats.bitrate).
+								Uint64("delta_bytes", deltaBytes).
+								Msg("calculated bitrate")
 						}
 					}
 
@@ -182,6 +217,14 @@ func (c *WebRTCStatsCollector) updateAllConnectionStats(ctx context.Context) {
 				}
 			}
 		}
+	}
+
+	if statsProcessed > 0 || videoStatsFound > 0 {
+		c.logger.Debug().
+			Int("total_stats", statsProcessed).
+			Int("video_stats", videoStatsFound).
+			Int("connections", len(c.connections)).
+			Msg("updated connection stats")
 	}
 }
 
@@ -303,7 +346,17 @@ func (c *WebRTCStatsCollector) CollectStats(ctx context.Context, duration time.D
 		Float64("avg_bitrate_kbps", avgBitrate).
 		Int("viewers", numConnections).
 		Int("samples", sampleCount).
+		Int("latency_samples", len(frameLatencies)).
 		Msg("WebRTC stats collection completed")
+
+	// Warn if we got zeros (common issue)
+	if numConnections == 0 {
+		c.logger.Warn().Msg("no WebRTC connections registered during stats collection")
+	} else if avgFrameRate == 0 && avgBitrate == 0 {
+		c.logger.Warn().
+			Int("connections", numConnections).
+			Msg("WebRTC connections exist but no video stats collected - video stream may not be active")
+	}
 
 	return stats, nil
 }
